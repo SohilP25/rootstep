@@ -47,36 +47,39 @@ def wilson(successes: int, tries: int, z: float = 1.96) -> tuple[float, float]:
     return max(0.0, centre - half), min(1.0, centre + half)
 
 
-def last_command_before(run: Run, k: int) -> str | None:
-    """The repeat guard's memory at step k: the last command that actually ran."""
-    return next((s.action for s in reversed(run.steps[:k]) if s.action), None)
+def last_command_before(run: Run, pos: int) -> str | None:
+    """The repeat guard's memory at a step: the last command that actually ran before it."""
+    return next((s.action for s in reversed(run.steps[:pos]) if s.action), None)
 
 
-async def rerun_from(task: Task, original: Run, k: int, llm: LLM, sandbox: Sandbox) -> Run:
-    """Go back to just before step k of `original` and let the agent carry on afresh."""
-    step = original.steps[k]
+async def rerun_from(task: Task, original: Run, pos: int, llm: LLM, sandbox: Sandbox) -> Run:
+    """Go back to just before the step at position `pos` in `original` and carry on afresh.
+
+    `pos` is a position in the steps list. For a normal run it equals the step
+    number; a re-run that started at step 11 has step 11 at position 0."""
+    step = original.steps[pos]
     rerun = Run(
-        run_id=f"{original.run_id}-k{k}-{uuid.uuid4().hex[:4]}",
+        run_id=f"{original.run_id}-k{step.index}-{uuid.uuid4().hex[:4]}",
         task=original.task,
         config=original.config,               # same agent, same settings
         start_snapshot=original.start_snapshot,
         parent_run_id=original.run_id,
-        fork_step=k,
+        fork_step=step.index,
     )
     await run_agent(task, llm, sandbox, rerun,
                     snapshot=step.snapshot_before, cwd=step.cwd_before,
-                    messages=step.messages_sent, start_index=k,
-                    last_action=last_command_before(original, k))
+                    messages=step.messages_sent, start_index=step.index,
+                    last_action=last_command_before(original, pos))
     result = await sandbox.run(rerun.final_snapshot, task.check, task.workdir)
     rerun.success = result.exit_code == 0
     return rerun
 
 
-async def score_step(task: Task, original: Run, k: int, tries: int, llm: LLM, sandbox: Sandbox,
+async def score_step(task: Task, original: Run, pos: int, tries: int, llm: LLM, sandbox: Sandbox,
                      gate: asyncio.Semaphore, reruns_dir: Path | None = None) -> StepScore:
     async def one() -> Run:
         async with gate:
-            rerun = await rerun_from(task, original, k, llm, sandbox)
+            rerun = await rerun_from(task, original, pos, llm, sandbox)
         if reruns_dir:
             rerun.save(reruns_dir)
         return rerun
@@ -86,12 +89,12 @@ async def score_step(task: Task, original: Run, k: int, tries: int, llm: LLM, sa
     errors = [f"{type(r).__name__}: {r}"[:200] for r in results if isinstance(r, BaseException)]
     successes = sum(bool(r.success) for r in done)
     low, high = wilson(successes, len(done))
-    return StepScore(k, successes, len(done), successes / len(done) if done else 0.0,
-                     low, high, [r.run_id for r in done], errors)
+    return StepScore(original.steps[pos].index, successes, len(done),
+                     successes / len(done) if done else 0.0, low, high, [r.run_id for r in done], errors)
 
 
 def decisive_step(scores: list[StepScore]) -> dict | None:
-    """The step after which the rescue rate falls the most.
+    """The step after which the rescue rate falls the most, or None if it never falls.
 
     `confident` is True when the two 95% ranges don't overlap, i.e. the drop
     is very unlikely to be luck."""
@@ -103,14 +106,15 @@ def decisive_step(scores: list[StepScore]) -> dict | None:
             best = {"step": here.step, "next_scored_step": after.step, "drop": round(drop, 3),
                     "rate_before": here.rate, "rate_after": after.rate,
                     "confident": here.low > after.high}
-    return best
+    return best if best and best["drop"] > 0 else None
 
 
-async def attribute(task: Task, original: Run, llm: LLM, sandbox: Sandbox, *, steps: list[int],
+async def attribute(task: Task, original: Run, llm: LLM, sandbox: Sandbox, *, positions: list[int],
                     tries: int = 5, parallel: int = 10, reruns_dir: Path | None = None) -> dict:
+    """Score the steps at `positions` (indexes into original.steps)."""
     gate = asyncio.Semaphore(parallel)
-    scores = await asyncio.gather(*(score_step(task, original, k, tries, llm, sandbox, gate, reruns_dir)
-                                    for k in steps))
+    scores = await asyncio.gather(*(score_step(task, original, pos, tries, llm, sandbox, gate, reruns_dir)
+                                    for pos in positions))
     return {
         "run_id": original.run_id,
         "task": original.task,

@@ -71,7 +71,7 @@ def test_attribute_end_to_end():
                    "s0", steps=[make_step(0, "ls", "s1"), make_step(1, "rm -rf x", "s2"),
                                 make_step(2, "cat y", "s3")], success=False)
     llm = FakeLLM()
-    report = asyncio.run(attribute(TEXTSTATS, original, llm, FakeSandbox(), steps=[0, 1, 2], tries=4))
+    report = asyncio.run(attribute(TEXTSTATS, original, llm, FakeSandbox(), positions=[0, 1, 2], tries=4))
 
     rates = {s["step"]: s["rate"] for s in report["scores"]}
     assert rates == {0: 1.0, 1: 1.0, 2: 0.0}        # step 1's save point was the last good one
@@ -83,5 +83,19 @@ def test_attribute_end_to_end():
 def test_rerun_ids_point_back(k):
     original = Run("orig", "textstats", {"model": "m", "temperature": 0.7, "thinking": False, "max_steps": 30},
                    "s0", steps=[make_step(0, "ls", "s1"), make_step(1, "a", "s2"), make_step(2, "b", "s3")])
-    report = asyncio.run(attribute(TEXTSTATS, original, FakeLLM(), FakeSandbox(), steps=[k], tries=2))
+    report = asyncio.run(attribute(TEXTSTATS, original, FakeLLM(), FakeSandbox(), positions=[k], tries=2))
     assert all(rid.startswith(f"orig-k{k}-") for rid in report["scores"][0]["rerun_ids"])
+
+
+def test_rates_only_rise_means_no_decisive_step():
+    assert decisive_step([score(0, 1, 3), score(5, 2, 3), score(14, 3, 3)]) is None
+
+
+def test_rerun_of_a_rerun_keeps_real_step_numbers():
+    # a re-run that started at step 11: its first diary entry is step 11, at position 0
+    rerun = Run("orig-k11-abcd", "textstats", {"model": "m", "temperature": 0.7, "thinking": False, "max_steps": 30},
+                "s0", steps=[make_step(11, "sed -i x", "s12"), make_step(12, None, "s12")],
+                parent_run_id="orig", fork_step=11)
+    report = asyncio.run(attribute(TEXTSTATS, rerun, FakeLLM(), FakeSandbox(), positions=[0, 1], tries=2))
+    assert [s["step"] for s in report["scores"]] == [11, 12]
+    assert all(rid.startswith("orig-k11-abcd-k11-") for rid in report["scores"][0]["rerun_ids"])
