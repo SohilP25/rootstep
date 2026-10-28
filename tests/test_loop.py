@@ -51,7 +51,7 @@ def test_full_loop():
     assert run.finished and run.final_snapshot == "snap2"
     assert abs(run.total_cost_usd - 0.005) < 1e-9
     # settings come from run.config, so re-runs use the same agent
-    assert llm.calls[0][1] == {"model": "m", "temperature": 0.7, "thinking": False}
+    assert llm.calls[0][1] == {"model": "m", "temperature": 0.7, "thinking": False, "max_tokens": 2048}
     # the hidden reasoning is never sent back to the model
     assert all("hidden thoughts" not in m["content"] for m in run.steps[-1].messages_sent)
 
@@ -78,3 +78,25 @@ def test_save_and_load(tmp_path):
     run = asyncio.run(run_agent(TEXTSTATS, FakeLLM([bash("ls"), "FINISH"]), FakeSandbox(), new_run()))
     loaded = Run.load(run.save(tmp_path))
     assert loaded == run
+
+
+def test_tidy_history_for_new_runs():
+    # harness 0.3+: leaked reasoning dropped, invented outputs never reach the next step
+    rambling = ("I should look around.</think>THOUGHT: list the files\n```bash\nls\n```\n"
+                "```bash\nfake output that never happened\n```\nTHOUGHT: now this\n```bash\nrm -rf /\n```")
+    run = new_run()
+    run.config["harness_version"] = "0.3"
+    llm = FakeLLM([rambling, "THOUGHT: done\nFINISH"])
+    asyncio.run(run_agent(TEXTSTATS, llm, FakeSandbox(), run))
+
+    assert run.steps[0].action == "ls"
+    assert run.steps[0].raw_response == rambling                 # the diary keeps the full evidence
+    kept = run.steps[1].messages_sent[2]["content"]
+    assert kept == "THOUGHT: list the files\n```bash\nls\n```"  # the conversation keeps only what ran
+    assert llm.calls[0][1]["max_tokens"] == 600
+
+
+def test_old_runs_keep_old_behaviour():
+    llm = FakeLLM(["THOUGHT: a\n```bash\nls\n```\nextra text", "FINISH"])
+    run = asyncio.run(run_agent(TEXTSTATS, llm, FakeSandbox(), new_run()))
+    assert run.steps[1].messages_sent[2]["content"].endswith("extra text")

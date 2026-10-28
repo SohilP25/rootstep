@@ -2,8 +2,10 @@
 import asyncio
 
 import pytest
+from dataclasses import asdict
 
-from rootstep.attribute import StepScore, attribute, decisive_step, last_command_before, wilson
+from rootstep.attribute import (StepScore, attribute, biggest_drop, build_report, last_command_before,
+                                merge_scores, point_of_no_return, wilson)
 from rootstep.llm import Reply
 from rootstep.record import Run, Step
 from rootstep.sandbox import CommandResult
@@ -22,16 +24,40 @@ def score(step, successes, tries):
     return StepScore(step, successes, tries, successes / tries, low, high)
 
 
-def test_decisive_step_is_biggest_drop():
+def test_biggest_drop():
     scores = [score(0, 9, 10), score(1, 9, 10), score(2, 8, 10), score(3, 1, 10), score(4, 0, 10)]
-    d = decisive_step(scores)
+    d = biggest_drop(scores)
     assert d["step"] == 2 and d["next_scored_step"] == 3
     assert d["confident"]                           # 8/10 vs 1/10: ranges don't overlap
 
 
 def test_small_samples_are_not_confident():
-    d = decisive_step([score(0, 2, 3), score(1, 1, 3)])
+    d = biggest_drop([score(0, 2, 3), score(1, 1, 3)])
     assert d["step"] == 0 and not d["confident"]
+
+
+def test_point_of_no_return_ignores_an_unlucky_dip():
+    # the real curve of run 382be4fa-k0-e8ca (4 tries per step)
+    curve = [score(0, 3, 4), score(3, 0, 4), score(6, 4, 4), score(9, 2, 4), score(12, 0, 4),
+             score(15, 1, 4), score(18, 0, 4), score(21, 0, 4), score(24, 0, 4), score(27, 0, 4)]
+    p = point_of_no_return(curve)
+    assert (p["step"], p["next_scored_step"], p["later_tries"]) == (15, 18, 16)
+    assert not p["confident"]                       # 1/4 is too few to be sure
+    assert biggest_drop(curve)["step"] == 0         # the naive rule is fooled by the dip at step 3
+
+
+def test_no_point_of_no_return_when_still_saveable_at_the_end():
+    assert point_of_no_return([score(0, 1, 4), score(5, 2, 4)]) is None
+    assert point_of_no_return([score(0, 0, 4), score(5, 0, 4)]) is None
+
+
+def test_merge_adds_tries():
+    old = [asdict(score(15, 1, 4)), asdict(score(18, 0, 4))]
+    merged = merge_scores(old, [score(15, 5, 6), score(16, 2, 6)])
+    by_step = {s.step: s for s in merged}
+    assert (by_step[15].successes, by_step[15].tries) == (6, 10)
+    assert by_step[16].tries == 6 and by_step[18].tries == 4
+    assert [s.step for s in merged] == [15, 16, 18]
 
 
 def make_step(i, action, snap):
@@ -71,11 +97,12 @@ def test_attribute_end_to_end():
                    "s0", steps=[make_step(0, "ls", "s1"), make_step(1, "rm -rf x", "s2"),
                                 make_step(2, "cat y", "s3")], success=False)
     llm = FakeLLM()
-    report = asyncio.run(attribute(TEXTSTATS, original, llm, FakeSandbox(), positions=[0, 1, 2], tries=4))
+    scores = asyncio.run(attribute(TEXTSTATS, original, llm, FakeSandbox(), positions=[0, 1, 2], tries=4))
+    report = build_report(original, scores, 0.0)
 
     rates = {s["step"]: s["rate"] for s in report["scores"]}
     assert rates == {0: 1.0, 1: 1.0, 2: 0.0}        # step 1's save point was the last good one
-    assert report["decisive"]["step"] == 1           # what the agent did at step 1 sealed its fate
+    assert report["point_of_no_return"]["step"] == 1  # what the agent did at step 1 sealed its fate
     assert "before step 2" in llm.first_messages     # re-runs got the original conversation of step k
 
 
@@ -83,12 +110,12 @@ def test_attribute_end_to_end():
 def test_rerun_ids_point_back(k):
     original = Run("orig", "textstats", {"model": "m", "temperature": 0.7, "thinking": False, "max_steps": 30},
                    "s0", steps=[make_step(0, "ls", "s1"), make_step(1, "a", "s2"), make_step(2, "b", "s3")])
-    report = asyncio.run(attribute(TEXTSTATS, original, FakeLLM(), FakeSandbox(), positions=[k], tries=2))
-    assert all(rid.startswith(f"orig-k{k}-") for rid in report["scores"][0]["rerun_ids"])
+    scores = asyncio.run(attribute(TEXTSTATS, original, FakeLLM(), FakeSandbox(), positions=[k], tries=2))
+    assert all(rid.startswith(f"orig-k{k}-") for rid in scores[0].rerun_ids)
 
 
-def test_rates_only_rise_means_no_decisive_step():
-    assert decisive_step([score(0, 1, 3), score(5, 2, 3), score(14, 3, 3)]) is None
+def test_rates_only_rise_means_no_drop():
+    assert biggest_drop([score(0, 1, 3), score(5, 2, 3), score(14, 3, 3)]) is None
 
 
 def test_rerun_of_a_rerun_keeps_real_step_numbers():
@@ -96,6 +123,6 @@ def test_rerun_of_a_rerun_keeps_real_step_numbers():
     rerun = Run("orig-k11-abcd", "textstats", {"model": "m", "temperature": 0.7, "thinking": False, "max_steps": 30},
                 "s0", steps=[make_step(11, "sed -i x", "s12"), make_step(12, None, "s12")],
                 parent_run_id="orig", fork_step=11)
-    report = asyncio.run(attribute(TEXTSTATS, rerun, FakeLLM(), FakeSandbox(), positions=[0, 1], tries=2))
-    assert [s["step"] for s in report["scores"]] == [11, 12]
-    assert all(rid.startswith("orig-k11-abcd-k11-") for rid in report["scores"][0]["rerun_ids"])
+    scores = asyncio.run(attribute(TEXTSTATS, rerun, FakeLLM(), FakeSandbox(), positions=[0, 1], tries=2))
+    assert [s.step for s in scores] == [11, 12]
+    assert all(rid.startswith("orig-k11-abcd-k11-") for rid in scores[0].rerun_ids)

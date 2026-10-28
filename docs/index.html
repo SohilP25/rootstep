@@ -1,0 +1,384 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rootstep</title>
+<meta name="description" content="Rootstep finds the step where an AI agent's failure began, by going back to save points and letting the agent try again.">
+<style>
+:root {
+  color-scheme: light;
+  --surface-0: #f4f3ef;
+  --surface-1: #fcfcfb;
+  --text-primary: #0b0b0b;
+  --text-secondary: #52514e;
+  --text-muted: #6b6a65;
+  --grid: #e1e0d9;
+  --axis: #c3c2b7;
+  --border: rgba(11, 11, 11, 0.10);
+  --series-1: #2a78d6;
+  --accent: #eb6834;
+  --accent-tint: rgba(235, 104, 52, 0.12);
+  --lost: #b4b2a9;
+  --code-bg: #f1efe8;
+  --ok: #0ca30c;
+  --bad: #d03b3b;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --surface-0: #121211;
+    --surface-1: #1a1a19;
+    --text-primary: #f0efec;
+    --text-secondary: #c3c2b7;
+    --text-muted: #9c9a92;
+    --grid: #2c2c2a;
+    --axis: #383835;
+    --border: rgba(255, 255, 255, 0.10);
+    --series-1: #3987e5;
+    --accent: #d95926;
+    --accent-tint: rgba(217, 89, 38, 0.18);
+    --lost: #5f5e5a;
+    --code-bg: #232321;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface-0: #121211;
+  --surface-1: #1a1a19;
+  --text-primary: #f0efec;
+  --text-secondary: #c3c2b7;
+  --text-muted: #9c9a92;
+  --grid: #2c2c2a;
+  --axis: #383835;
+  --border: rgba(255, 255, 255, 0.10);
+  --series-1: #3987e5;
+  --accent: #d95926;
+  --accent-tint: rgba(217, 89, 38, 0.18);
+  --lost: #5f5e5a;
+  --code-bg: #232321;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--surface-0); color: var(--text-primary);
+  font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+main { max-width: 920px; margin: 0 auto; padding: 32px 16px 64px; }
+h1 { font-size: 28px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+h2 { font-size: 18px; font-weight: 600; margin: 0 0 4px; }
+.tag { font-size: 18px; color: var(--text-secondary); margin: 2px 0 12px; }
+.lede { color: var(--text-secondary); max-width: 68ch; margin: 0; }
+.card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin-top: 16px; }
+.sub { color: var(--text-muted); font-size: 14px; margin: 0 0 12px; }
+.picker { margin-top: 20px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 14px; color: var(--text-secondary); }
+select { font: inherit; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary); max-width: 100%; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(125px, 1fr)); gap: 12px; margin-top: 16px; }
+.tile { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; min-width: 0; }
+.tile .label { font-size: 13px; color: var(--text-muted); }
+.tile .value { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.chart-wrap { position: relative; }
+#chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+#chart text { fill: var(--text-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+#chart .hit { fill: transparent; cursor: pointer; }
+#chart .hit:hover + .bar, #chart .bar.active { opacity: 0.8; }
+.tooltip {
+  position: absolute; pointer-events: none; background: var(--surface-1); color: var(--text-primary);
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 13px; line-height: 1.45;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12); max-width: 280px; opacity: 0; transition: opacity 0.1s;
+}
+.tooltip code { font-size: 12px; }
+.legend { display: flex; flex-wrap: wrap; gap: 16px; font-size: 13px; color: var(--text-secondary); margin-top: 10px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.swatch { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+.finding { border-left: 4px solid var(--accent); border-radius: 0; background: var(--accent-tint); padding: 14px 16px; margin-top: 16px; }
+.finding p { margin: 4px 0 0; color: var(--text-secondary); }
+.finding strong { color: var(--text-primary); }
+ol.steps { list-style: none; padding: 0; margin: 12px 0 0; }
+ol.steps li { border-top: 1px solid var(--border); padding: 12px 0 12px 12px; border-left: 3px solid transparent; scroll-margin-top: 16px; }
+ol.steps li.pnr { border-left-color: var(--accent); background: var(--accent-tint); }
+ol.steps li.flash { outline: 2px solid var(--series-1); outline-offset: -2px; }
+.step-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-size: 14px; }
+.num { font-weight: 600; font-variant-numeric: tabular-nums; min-width: 4.5em; }
+.chip { font-size: 12px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--text-secondary); white-space: nowrap; }
+.chip.rescue { border-color: var(--series-1); color: var(--text-primary); }
+.chip.pnr { border-color: var(--accent); color: var(--text-primary); }
+.thought { color: var(--text-secondary); font-size: 14px; margin: 4px 0; }
+pre, code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+pre { background: var(--code-bg); border-radius: 8px; padding: 8px 10px; margin: 6px 0 0; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
+details summary { cursor: pointer; font-size: 13px; color: var(--text-muted); margin-top: 6px; }
+.how { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-top: 12px; }
+.how div { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 14px; }
+.how b { display: block; margin-bottom: 4px; }
+.how p { margin: 0; color: var(--text-secondary); font-size: 14px; }
+footer { margin-top: 40px; font-size: 13px; color: var(--text-muted); }
+a { color: var(--series-1); }
+.empty { color: var(--text-muted); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Rootstep</h1>
+    <p class="tag">Find the step where your AI agent's failure began.</p>
+    <p class="lede">An AI agent tried to fix a bug and failed. Rootstep went back to the save point
+      before each step, let the agent decide again several times, and measured how often the run
+      could still be saved. Where that number falls to zero and stays there is the
+      <strong>point of no return</strong>.</p>
+  </header>
+
+  <div class="picker" id="picker" hidden>
+    <label for="run-select">Analyzed run</label>
+    <select id="run-select"></select>
+  </div>
+
+  <div id="content"><p class="empty card">Loading…</p></div>
+
+  <section style="margin-top:32px">
+    <h2>How it works</h2>
+    <div class="how">
+      <div><b>1. Record</b><p>Every command the agent runs happens in a Nebius Token Factory Sandbox, which saves a snapshot of the files after each step.</p></div>
+      <div><b>2. Go back</b><p>For a step k, Rootstep loads the snapshot from just before it and gives the agent the same conversation. NVIDIA Nemotron decides step k again, several times in parallel.</p></div>
+      <div><b>3. Measure</b><p>The share of re-runs that succeed is the step's rescue rate, shown with a 95% range. The last step that can still be saved marks the point of no return.</p></div>
+    </div>
+  </section>
+
+  <footer>
+    Built with Nebius Token Factory (Sandboxes + inference) and NVIDIA Nemotron 3.5 Lightning ·
+    <a href="https://github.com/SohilP25/rootstep">source on GitHub</a> · Apache-2.0
+  </footer>
+</main>
+
+<div class="tooltip" id="tooltip" role="status"></div>
+
+<script>
+const $ = (sel) => document.querySelector(sel);
+const el = (tag, attrs = {}, text) => {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+  if (text !== undefined) n.textContent = text;
+  return n;
+};
+const svgEl = (tag, attrs = {}) => {
+  const n = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+  return n;
+};
+const pct = (x) => `${Math.round(x * 100)}%`;
+const firstLine = (s) => (s || "").split("\n")[0];
+
+function where(d) {
+  return d.next_scored_step === d.step + 1 ? `step ${d.step}` : `between step ${d.step} and step ${d.next_scored_step - 1}`;
+}
+
+let current = null;
+
+async function start() {
+  let index = [];
+  try {
+    index = await (await fetch("data/index.json")).json();
+  } catch (e) {
+    $("#content").innerHTML = '<p class="empty card">No analyses found. Run <code>python rootstep/export_site.py</code> first.</p>';
+    return;
+  }
+  if (!index.length) {
+    $("#content").innerHTML = '<p class="empty card">No analyses exported yet.</p>';
+    return;
+  }
+  const failedFirst = [...index].sort((a, b) => (a.success === b.success ? 0 : a.success ? 1 : -1));
+  const select = $("#run-select");
+  for (const r of failedFirst) {
+    const label = `${r.run_id} · ${r.task} · ${r.success ? "succeeded" : "failed"} · ${r.reruns} re-runs`;
+    select.append(el("option", { value: r.run_id }, label));
+  }
+  const wanted = new URLSearchParams(location.search).get("run");
+  if (wanted && index.some((r) => r.run_id === wanted)) select.value = wanted;
+  $("#picker").hidden = index.length < 2;
+  select.addEventListener("change", () => load(select.value));
+  load(select.value);
+}
+
+async function load(runId) {
+  current = await (await fetch(`data/${runId}.json`)).json();
+  render(current);
+  history.replaceState(null, "", `?run=${encodeURIComponent(runId)}`);
+}
+
+function render({ run, analysis }) {
+  const content = $("#content");
+  content.innerHTML = "";
+  const p = analysis.point_of_no_return;
+  const lastStep = run.steps[run.steps.length - 1];
+  const outcome = run.success ? "Succeeded" : run.finished ? "Failed (said done, check failed)" : `Failed (used all ${run.max_steps} steps)`;
+
+  const tiles = el("section", { class: "tiles" });
+  const tile = (label, value) => {
+    const t = el("div", { class: "tile" });
+    t.append(el("div", { class: "label" }, label), el("div", { class: "value" }, value));
+    tiles.append(t);
+  };
+  tile("Task", run.task);
+  tile("Original run", outcome);
+  tile("Steps", `${run.steps[0].index}–${lastStep.index}`);
+  tile("Re-runs", String(analysis.reruns));
+  tile("Point of no return", p ? (p.next_scored_step === p.step + 1 ? `step ${p.step}` : `steps ${p.step}–${p.next_scored_step - 1}`) : "none");
+  tile("Analysis cost", `$${(analysis.cost_usd || 0).toFixed(2)}`);
+  content.append(tiles);
+
+  const card = el("section", { class: "card" });
+  card.append(el("h2", {}, "Rescue rate by step"),
+              el("p", { class: "sub" }, "Share of re-runs from just before each step that succeeded. Thin lines show the 95% range. Hover a bar for details; click it to jump to that step."));
+  const wrap = el("div", { class: "chart-wrap" });
+  wrap.append(el("div", { id: "chart" }));
+  card.append(wrap);
+  const legend = el("div", { class: "legend" });
+  legend.innerHTML = '<span><i class="swatch" style="background:var(--series-1)"></i>Rescue rate (run could still be saved)</span>' +
+                     '<span><i class="swatch" style="background:var(--lost)"></i>0%: no re-run succeeded</span>' +
+                     (p ? '<span><i class="swatch" style="background:var(--accent)"></i>Point of no return</span>' : "");
+  card.append(legend);
+  content.append(card);
+
+  const finding = el("section", { class: "finding" });
+  if (p) {
+    finding.innerHTML = `<strong>Point of no return: ${where(p)}.</strong>`;
+    const lines = [
+      `Going back to step ${p.step} still saved the run ${pct(p.rate_before)} of the time. From step ${p.next_scored_step} on, 0 of ${p.later_tries} re-runs succeeded.`,
+      p.confident ? "The two ranges don't overlap, so this is very unlikely to be luck."
+                  : "Not yet confident: more re-runs around these steps would sharpen the answer.",
+    ];
+    const d = analysis.biggest_drop;
+    if (d && !(d.step === p.step && d.next_scored_step === p.next_scored_step)) {
+      lines.push(`The single biggest drop (${where(d)}: ${pct(d.rate_before)} → ${pct(d.rate_after)}) is ${d.confident ? "also significant" : "likely an unlucky dip, since later steps recover"}.`);
+    }
+    for (const line of lines) finding.append(el("p", {}, line));
+  } else {
+    finding.innerHTML = "<strong>No point of no return found.</strong>";
+    finding.append(el("p", {}, run.success ? "This run succeeded, so there is nothing to blame." : "The run could still be saved at the last scored step, or could never be saved."));
+  }
+  content.append(finding);
+
+  const tl = el("section", { class: "card" });
+  tl.append(el("h2", {}, "What the agent did"),
+            el("p", { class: "sub" }, "The original run, step by step. Badges show how often going back to that step saved the run."));
+  const list = el("ol", { class: "steps" });
+  const scoreOf = Object.fromEntries(analysis.scores.map((s) => [s.step, s]));
+  for (const s of run.steps) {
+    const inPnr = p && s.index >= p.step && s.index < p.next_scored_step;
+    const li = el("li", { id: `step-${s.index}`, class: inPnr ? "pnr" : "" });
+    const head = el("div", { class: "step-head" });
+    head.append(el("span", { class: "num" }, `Step ${s.index}`));
+    const sc = scoreOf[s.index];
+    if (sc) head.append(el("span", { class: "chip rescue" }, `rescued ${sc.successes}/${sc.tries}`));
+    if (inPnr) head.append(el("span", { class: "chip pnr" }, "point of no return"));
+    if (s.action) head.append(el("span", { class: "chip" }, `exit ${s.exit_code}`));
+    if (s.reply) head.append(el("span", { class: "chip pnr" }, `long reply: ${(s.reply_chars / 1000).toFixed(1)}k characters`));
+    li.append(head);
+    if (s.thought) li.append(el("div", { class: "thought" }, s.thought));
+    if (s.action) {
+      li.append(el("pre", {}, s.action));
+      if (s.output) {
+        const det = el("details");
+        det.append(el("summary", {}, "output"), el("pre", {}, s.output));
+        li.append(det);
+      }
+    } else {
+      li.append(el("div", { class: "thought" }, s.finish ? "Said FINISH." : s.output));
+    }
+    if (s.reply) {
+      const det = el("details");
+      det.append(el("summary", {}, "full reply (the model wrote more than one command, often with outputs it made up)"),
+                 el("pre", {}, s.reply));
+      li.append(det);
+    }
+    list.append(li);
+  }
+  tl.append(list);
+  content.append(tl);
+
+  drawChart(run, analysis);
+}
+
+function drawChart(run, analysis) {
+  const box = $("#chart");
+  box.innerHTML = "";
+  const W = Math.max(300, box.clientWidth), H = 260;
+  const m = { top: 28, right: 8, bottom: 30, left: 40 };
+  const first = run.steps[0].index, last = run.steps[run.steps.length - 1].index;
+  const n = last - first + 1;
+  const band = (W - m.left - m.right) / n;
+  const x = (step) => m.left + (step - first + 0.5) * band;
+  const y = (v) => m.top + (1 - v) * (H - m.top - m.bottom);
+  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, role: "img",
+    "aria-label": "Bar chart of rescue rate by step with 95% ranges" });
+  const p = analysis.point_of_no_return;
+
+  if (p) {
+    const x0 = x(p.step) - band / 2, x1 = x(p.next_scored_step) - band / 2;
+    svg.append(svgEl("rect", { x: x0, y: m.top, width: x1 - x0, height: H - m.top - m.bottom, fill: "var(--accent-tint)" }));
+    const label = svgEl("text", { x: (x0 + x1) / 2, y: m.top - 10, "text-anchor": "middle" });
+    label.textContent = "point of no return";
+    label.style.fill = "var(--text-primary)";
+    svg.append(label);
+    svg.append(svgEl("line", { x1: x1, x2: x1, y1: m.top, y2: H - m.bottom, stroke: "var(--accent)", "stroke-width": 2 }));
+  }
+
+  for (const v of [0, 0.25, 0.5, 0.75, 1]) {
+    svg.append(svgEl("line", { x1: m.left, x2: W - m.right, y1: y(v), y2: y(v), stroke: v === 0 ? "var(--axis)" : "var(--grid)", "stroke-width": 1 }));
+    const t = svgEl("text", { x: m.left - 6, y: y(v) + 4, "text-anchor": "end" });
+    t.textContent = pct(v);
+    svg.append(t);
+  }
+
+  const barW = Math.max(4, Math.min(24, band * 0.7));
+  const tip = $("#tooltip");
+  const byIndex = Object.fromEntries(run.steps.map((s) => [s.index, s]));
+  for (const s of analysis.scores) {
+    const cx = x(s.step);
+    const g = svgEl("g");
+    const hit = svgEl("rect", { class: "hit", x: cx - band / 2, y: m.top, width: band, height: H - m.top - m.bottom });
+    const h = Math.max(0, y(0) - y(s.rate));
+    const bar = s.rate > 0
+      ? svgEl("path", { class: "bar", fill: "var(--series-1)",
+          d: `M${cx - barW / 2},${y(0)} V${y(s.rate) + Math.min(4, h)} q0,-${Math.min(4, h)} ${Math.min(4, h)},-${Math.min(4, h)} H${cx + barW / 2 - Math.min(4, h)} q${Math.min(4, h)},0 ${Math.min(4, h)},${Math.min(4, h)} V${y(0)} Z` })
+      : svgEl("rect", { class: "bar", x: cx - barW / 2, y: y(0) - 3, width: barW, height: 3, fill: "var(--lost)" });
+    g.append(hit, bar);
+    g.append(svgEl("line", { x1: cx, x2: cx, y1: y(s.low), y2: y(s.high), stroke: "var(--text-secondary)", "stroke-width": 1 }));
+    for (const v of [s.low, s.high]) g.append(svgEl("line", { x1: cx - 4, x2: cx + 4, y1: y(v), y2: y(v), stroke: "var(--text-secondary)", "stroke-width": 1 }));
+    const tick = svgEl("text", { x: cx, y: H - m.bottom + 16, "text-anchor": "middle" });
+    tick.textContent = s.step;
+    g.append(tick);
+
+    const cmd = firstLine(byIndex[s.step] && byIndex[s.step].action) || "(no command)";
+    hit.addEventListener("mousemove", (ev) => {
+      tip.innerHTML = "";
+      tip.append(el("b", {}, `Step ${s.step}`), el("br"),
+                 document.createTextNode(`${s.successes} of ${s.tries} re-runs succeeded (${pct(s.rate)})`), el("br"),
+                 document.createTextNode(`95% range: ${pct(s.low)}–${pct(s.high)}`), el("br"),
+                 el("code", {}, cmd.length > 60 ? cmd.slice(0, 60) + "…" : cmd));
+      const r = box.getBoundingClientRect();
+      const left = Math.min(ev.clientX - r.left + 12, r.width - 290);
+      tip.style.left = `${r.left + window.scrollX + Math.max(0, left)}px`;
+      tip.style.top = `${r.top + window.scrollY + ev.clientY - r.top + 12}px`;
+      tip.style.opacity = 1;
+    });
+    hit.addEventListener("mouseleave", () => { tip.style.opacity = 0; });
+    hit.addEventListener("click", () => {
+      const target = document.getElementById(`step-${s.step}`);
+      if (!target) return;
+      target.scrollIntoView({ behavior: "smooth", block: "center" });
+      target.classList.add("flash");
+      setTimeout(() => target.classList.remove("flash"), 1600);
+    });
+    svg.append(g);
+  }
+  box.append(svg);
+}
+
+let resizeTimer;
+window.addEventListener("resize", () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => current && drawChart(current.run, current.analysis), 150);
+});
+start();
+</script>
+</body>
+</html>

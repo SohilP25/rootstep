@@ -1,0 +1,24 @@
+[
+ {
+  "run_id": "382be4fa-k0-e8ca",
+  "task": "textstats",
+  "success": false,
+  "steps": 30,
+  "reruns": 40,
+  "point_of_no_return": {
+   "step": 15,
+   "next_scored_step": 18,
+   "rate_before": 0.25,
+   "later_tries": 16,
+   "confident": false
+  }
+ },
+ {
+  "run_id": "382be4fa",
+  "task": "textstats",
+  "success": true,
+  "steps": 19,
+  "reruns": 15,
+  "point_of_no_return": null
+ }
+]

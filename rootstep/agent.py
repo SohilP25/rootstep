@@ -68,6 +68,32 @@ def shorten(output: str) -> str:
     return output[:OBS_HEAD] + f"\n... [{cut} characters omitted] ...\n" + output[-OBS_TAIL:]
 
 
+def clean_reply(text: str) -> str:
+    """Drop reasoning that leaked into the answer (seen with thinking off: text, then a stray </think>)."""
+    return text.rpartition("</think>")[2].strip() or text
+
+
+def first_thought(text: str) -> str:
+    for line in text.splitlines():
+        if line.strip().startswith("THOUGHT:"):
+            return line.strip()[len("THOUGHT:"):].strip()
+    return ""
+
+
+def history_entry(text: str, proposed: str | None, finished: bool) -> str:
+    """What the conversation keeps of a reply (harness 0.3+): its first thought and the one command.
+
+    Seen in real runs: replies of 6,000+ characters that invent whole terminal
+    sessions (fake git logs, files that don't exist). Keeping those in the
+    conversation made the agent believe them. The full reply stays in the diary."""
+    thought = first_thought(text)
+    if finished:
+        return f"THOUGHT: {thought}\nFINISH"
+    if proposed:
+        return f"THOUGHT: {thought}\n```bash\n{proposed}\n```"
+    return text[:500]
+
+
 def first_messages(task: Task) -> list[dict]:
     return [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -90,20 +116,25 @@ async def run_agent(task: Task, llm: LLM, sandbox: Sandbox, run: Run, *,
     cwd = cwd or task.workdir
     messages = list(messages) if messages is not None else first_messages(task)
     cfg = run.config
+    # Re-runs must behave exactly like the agent that made the original run, so
+    # newer harness behaviour only switches on for runs recorded with it.
+    tidy = cfg.get("harness_version", "0.1") >= "0.3"
 
     for index in range(start_index, cfg["max_steps"]):
         messages_sent = list(messages)
         reply = await llm.chat(messages, model=cfg["model"], temperature=cfg["temperature"],
-                               thinking=cfg["thinking"])
+                               thinking=cfg["thinking"], max_tokens=600 if tidy else 2048)
+        text = clean_reply(reply.content) if tidy else reply.content
         snapshot_before, cwd_before = snapshot, cwd
         exit_code, raw = None, ""
 
         try:
-            action = parse_action(reply.content)
+            action = parse_action(text)
             finished = action is None
             observation = ""
         except ValueError:
             action, finished, observation = None, False, FORMAT_REMINDER
+        proposed = action
 
         if not finished and action is not None:
             if action == last_action:
@@ -129,7 +160,8 @@ async def run_agent(task: Task, llm: LLM, sandbox: Sandbox, run: Run, *,
         if finished:
             run.finished = True
             break
-        messages.append({"role": "assistant", "content": reply.content})
+        assistant = history_entry(text, proposed, finished) if tidy else reply.content
+        messages.append({"role": "assistant", "content": assistant})
         messages.append({"role": "user", "content": observation})
 
     run.final_snapshot = snapshot

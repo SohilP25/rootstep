@@ -18,7 +18,7 @@ from rootstep.record import Run, Step
 from rootstep.sandbox import Sandbox
 from rootstep.tasks import TASKS
 
-HARNESS_VERSION = "0.2"  # 0.2: THOUGHT-in-box parsing fix + prompt rule
+HARNESS_VERSION = "0.3"  # 0.2: THOUGHT-in-box parsing fix; 0.3: strip leaked </think> from content
 RUNS_DIR = Path(__file__).parent / "runs"
 
 

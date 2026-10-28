@@ -93,11 +93,11 @@ async def score_step(task: Task, original: Run, pos: int, tries: int, llm: LLM, 
                      successes / len(done) if done else 0.0, low, high, [r.run_id for r in done], errors)
 
 
-def decisive_step(scores: list[StepScore]) -> dict | None:
+def biggest_drop(scores: list[StepScore]) -> dict | None:
     """The step after which the rescue rate falls the most, or None if it never falls.
 
-    `confident` is True when the two 95% ranges don't overlap, i.e. the drop
-    is very unlikely to be luck."""
+    Easily fooled by one unlucky dip when tries are few, so it is reported as
+    extra information. `confident` is True when the two 95% ranges don't overlap."""
     scores = sorted((s for s in scores if s.tries), key=lambda s: s.step)
     best = None
     for here, after in zip(scores, scores[1:]):
@@ -109,18 +109,56 @@ def decisive_step(scores: list[StepScore]) -> dict | None:
     return best if best and best["drop"] > 0 else None
 
 
-async def attribute(task: Task, original: Run, llm: LLM, sandbox: Sandbox, *, positions: list[int],
-                    tries: int = 5, parallel: int = 10, reruns_dir: Path | None = None) -> dict:
-    """Score the steps at `positions` (indexes into original.steps)."""
-    gate = asyncio.Semaphore(parallel)
-    scores = await asyncio.gather(*(score_step(task, original, pos, tries, llm, sandbox, gate, reruns_dir)
-                                    for pos in positions))
+def point_of_no_return(scores: list[StepScore]) -> dict | None:
+    """The last step where re-deciding can still save the run.
+
+    It is the last scored step where at least one re-run succeeded, when every
+    scored step after it failed every time. The agent's original action at
+    that step (or between it and the next scored step) sealed the run's fate.
+    None if the run can still be saved at the last scored step, or never could.
+    `confident` is True when its 95% range sits above that of all later re-runs."""
+    scored = sorted((s for s in scores if s.tries), key=lambda s: s.step)
+    alive = [i for i, s in enumerate(scored) if s.successes > 0]
+    if not alive or alive[-1] == len(scored) - 1:
+        return None
+    here, later = scored[alive[-1]], scored[alive[-1] + 1:]
+    later_tries = sum(s.tries for s in later)
+    _, later_high = wilson(0, later_tries)
+    return {"step": here.step, "next_scored_step": later[0].step,
+            "rate_before": here.rate, "later_tries": later_tries,
+            "confident": here.low > later_high}
+
+
+def merge_scores(old: list[dict], new: list[StepScore]) -> list[StepScore]:
+    """Add new re-runs to earlier ones for the same steps, so repeated analyses sharpen the curve."""
+    by_step = {d["step"]: StepScore(**d) for d in old}
+    for s in new:
+        o = by_step.get(s.step)
+        if o is None:
+            by_step[s.step] = s
+            continue
+        successes, tries = o.successes + s.successes, o.tries + s.tries
+        low, high = wilson(successes, tries)
+        by_step[s.step] = StepScore(s.step, successes, tries, successes / tries if tries else 0.0,
+                                    low, high, o.rerun_ids + s.rerun_ids, o.errors + s.errors)
+    return sorted(by_step.values(), key=lambda s: s.step)
+
+
+def build_report(original: Run, scores: list[StepScore], cost_usd: float) -> dict:
     return {
         "run_id": original.run_id,
         "task": original.task,
         "original_success": original.success,
-        "tries_per_step": tries,
         "scores": [asdict(s) for s in scores],
-        "decisive": decisive_step(list(scores)),
-        "cost_usd": round(llm.spent_usd, 5),
+        "point_of_no_return": point_of_no_return(scores),
+        "biggest_drop": biggest_drop(scores),
+        "cost_usd": round(cost_usd, 5),
     }
+
+
+async def attribute(task: Task, original: Run, llm: LLM, sandbox: Sandbox, *, positions: list[int],
+                    tries: int = 5, parallel: int = 10, reruns_dir: Path | None = None) -> list[StepScore]:
+    """Score the steps at `positions` (indexes into original.steps)."""
+    gate = asyncio.Semaphore(parallel)
+    return list(await asyncio.gather(*(score_step(task, original, pos, tries, llm, sandbox, gate, reruns_dir)
+                                       for pos in positions)))
