@@ -1,0 +1,10 @@
+[project]
+name = "rootstep"
+version = "0.1.0"
+description = "Find the step where an AI agent's failure began."
+requires-python = ">=3.11"
+license = "Apache-2.0"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
