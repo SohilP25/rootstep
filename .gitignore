@@ -5,3 +5,4 @@ __pycache__/
 .DS_Store
 runs/
 spikes/out/
+.pytest_cache/
