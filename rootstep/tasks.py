@@ -17,6 +17,9 @@ class Task:
                   " && mkdir -p /opt/rootstep && cd /repo && sha256sum tests/*.py > /opt/rootstep/tests.sha256")
     image: str = "docker.io/library/python:3.12-slim"
     workdir: str = "/repo"
+    # A harmless-looking action that silently makes the task impossible, used
+    # to test Rootstep against a known answer (run_agent.py --plant STEP).
+    planted_mistake: dict | None = None
 
 
 CHECK_TESTS = "cd /repo && sha256sum --quiet -c /opt/rootstep/tests.sha256 && python -m pytest -q"
@@ -70,6 +73,13 @@ TEXTSTATS = Task(
         ),
     },
     check=CHECK_TESTS,
+    # Adding one blank line to the test file looks like tidying, and the tests
+    # still pass. But it breaks the rule "don't edit the tests" (the fingerprint
+    # check fails), and the agent can't notice or undo it.
+    planted_mistake={
+        "command": "printf '\\n' >> /repo/tests/test_cli.py",
+        "thought": "Tidy up: make sure the test file ends with a clean newline.",
+    },
 )
 
 TASKS = {t.name: t for t in [TEXTSTATS]}

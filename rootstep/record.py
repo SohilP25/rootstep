@@ -26,6 +26,7 @@ class Step:
     prompt_tokens: int
     completion_tokens: int
     cost_usd: float
+    planted: bool = False       # this step was a planted mistake (a test with a known answer)
 
 
 @dataclass
@@ -41,6 +42,7 @@ class Run:
     total_cost_usd: float = 0.0
     parent_run_id: str | None = None  # set on re-runs: the run we went back into
     fork_step: int | None = None      # set on re-runs: the step we re-decided from
+    planted_step: int | None = None   # set when a known mistake was planted at this step
 
     def save(self, folder: Path) -> Path:
         folder.mkdir(parents=True, exist_ok=True)

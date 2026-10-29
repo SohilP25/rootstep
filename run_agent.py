@@ -2,12 +2,13 @@
 
 Usage (from the workspace folder):
     python rootstep/run_agent.py textstats
+    python rootstep/run_agent.py textstats --plant 3   # test run: a known mistake at step 3
 
 Each step is printed as it happens. If you stop it with Ctrl+C, the diary
 of the steps so far is still saved.
 """
+import argparse
 import asyncio
-import sys
 import time
 import uuid
 from pathlib import Path
@@ -23,6 +24,8 @@ RUNS_DIR = Path(__file__).parent / "runs"
 
 
 def describe(step: Step) -> str:
+    if step.planted:
+        return f"PLANTED MISTAKE  {step.action}"
     if step.action:
         return f"exit {step.exit_code}  {step.action.splitlines()[0][:80]}"
     if step.observation_shown == "":
@@ -30,8 +33,13 @@ def describe(step: Step) -> str:
     return step.observation_shown.split(".")[0]
 
 
-async def main(task_name: str) -> None:
+async def main(task_name: str, plant_step: int | None) -> None:
     task = TASKS[task_name]
+    plant = None
+    if plant_step is not None:
+        if not task.planted_mistake:
+            raise SystemExit(f"Task '{task.name}' has no planted mistake defined")
+        plant = {"step": plant_step, **task.planted_mistake}
     sandbox = Sandbox()
     llm = LLM(budget_usd=0.25)
     t0 = time.monotonic()
@@ -49,10 +57,12 @@ async def main(task_name: str) -> None:
         config={"model": LIGHTNING, "temperature": 0.7, "thinking": False,
                 "max_steps": 30, "harness_version": HARNESS_VERSION},
         start_snapshot=start,
+        planted_step=plant_step,
     )
-    print(f"Running agent (run {run.run_id}):", flush=True)
+    note = f", known mistake planted at step {plant_step}" if plant else ""
+    print(f"Running agent (run {run.run_id}{note}):", flush=True)
     try:
-        await run_agent(task, llm, sandbox, run, on_step=show)
+        await run_agent(task, llm, sandbox, run, on_step=show, plant=plant)
         result = await sandbox.run(run.final_snapshot, task.check, task.workdir)
         run.success = result.exit_code == 0
     finally:
@@ -63,4 +73,9 @@ async def main(task_name: str) -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main(sys.argv[1] if len(sys.argv) > 1 else "textstats"))
+    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    p.add_argument("task", nargs="?", default="textstats")
+    p.add_argument("--plant", type=int, metavar="STEP",
+                   help="replace the agent's decision at STEP with the task's known mistake")
+    args = p.parse_args()
+    asyncio.run(main(args.task, args.plant))

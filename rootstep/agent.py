@@ -9,7 +9,7 @@ recorded, so Rootstep can later go back to any step and re-run from there.
 import re
 from collections.abc import Callable
 
-from .llm import LLM
+from .llm import LLM, Reply
 from .record import Run, Step
 from .sandbox import Sandbox
 from .tasks import Task
@@ -105,12 +105,17 @@ async def run_agent(task: Task, llm: LLM, sandbox: Sandbox, run: Run, *,
                     snapshot: str | None = None, cwd: str | None = None,
                     messages: list[dict] | None = None, start_index: int = 0,
                     last_action: str | None = None,
-                    on_step: Callable[[Step], None] | None = None) -> Run:
+                    on_step: Callable[[Step], None] | None = None,
+                    plant: dict | None = None) -> Run:
     """Run the agent and record every step into `run`.
 
     Normally it starts at the beginning of the task. For a re-run, pass the
     state of step k (snapshot, cwd, messages, start_index=k) and it carries
     on from there, deciding step k afresh.
+
+    `plant` = {"step", "command", "thought"} replaces the agent's decision at
+    that step with a known mistake. It is how we test Rootstep against a known
+    answer. Re-runs never plant, so re-deciding that step undoes the mistake.
     """
     snapshot = snapshot or run.start_snapshot
     cwd = cwd or task.workdir
@@ -122,9 +127,14 @@ async def run_agent(task: Task, llm: LLM, sandbox: Sandbox, run: Run, *,
 
     for index in range(start_index, cfg["max_steps"]):
         messages_sent = list(messages)
-        reply = await llm.chat(messages, model=cfg["model"], temperature=cfg["temperature"],
-                               thinking=cfg["thinking"], max_tokens=600 if tidy else 2048)
-        text = clean_reply(reply.content) if tidy else reply.content
+        planted = plant is not None and index == plant["step"]
+        if planted:
+            text = f"THOUGHT: {plant['thought']}\n```bash\n{plant['command']}\n```"
+            reply = Reply(text, None, 0, 0, 0.0)
+        else:
+            reply = await llm.chat(messages, model=cfg["model"], temperature=cfg["temperature"],
+                                   thinking=cfg["thinking"], max_tokens=600 if tidy else 2048)
+            text = clean_reply(reply.content) if tidy else reply.content
         snapshot_before, cwd_before = snapshot, cwd
         exit_code, raw = None, ""
 
@@ -151,7 +161,7 @@ async def run_agent(task: Task, llm: LLM, sandbox: Sandbox, run: Run, *,
             raw_response=reply.content, reasoning=reply.reasoning, action=action,
             observation_raw=raw, observation_shown=observation, exit_code=exit_code,
             prompt_tokens=reply.prompt_tokens, completion_tokens=reply.completion_tokens,
-            cost_usd=reply.cost_usd,
+            cost_usd=reply.cost_usd, planted=planted,
         ))
         run.total_cost_usd += reply.cost_usd
         if on_step:
@@ -160,7 +170,7 @@ async def run_agent(task: Task, llm: LLM, sandbox: Sandbox, run: Run, *,
         if finished:
             run.finished = True
             break
-        assistant = history_entry(text, proposed, finished) if tidy else reply.content
+        assistant = history_entry(text, proposed, finished) if tidy or planted else reply.content
         messages.append({"role": "assistant", "content": assistant})
         messages.append({"role": "user", "content": observation})
 

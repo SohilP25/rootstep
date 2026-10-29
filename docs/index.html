@@ -184,10 +184,12 @@ async function start() {
     $("#content").innerHTML = '<p class="empty card">No analyses exported yet.</p>';
     return;
   }
-  const failedFirst = [...index].sort((a, b) => (a.success === b.success ? 0 : a.success ? 1 : -1));
+  const rank = (r) => (r.planted_step != null ? 0 : r.success ? 2 : 1);
+  const failedFirst = [...index].sort((a, b) => rank(a) - rank(b));
   const select = $("#run-select");
   for (const r of failedFirst) {
-    const label = `${r.run_id} · ${r.task} · ${r.success ? "succeeded" : "failed"} · ${r.reruns} re-runs`;
+    const kind = r.planted_step != null ? `planted mistake at step ${r.planted_step}` : r.success ? "succeeded" : "failed on its own";
+    const label = `${r.run_id} · ${r.task} · ${kind} · ${r.reruns} re-runs`;
     select.append(el("option", { value: r.run_id }, label));
   }
   const wanted = new URLSearchParams(location.search).get("run");
@@ -217,6 +219,7 @@ function render({ run, analysis }) {
     tiles.append(t);
   };
   tile("Task", run.task);
+  if (run.planted_step != null) tile("Known answer (planted)", `step ${run.planted_step}`);
   tile("Original run", outcome);
   tile("Steps", `${run.steps[0].index}–${lastStep.index}`);
   tile("Re-runs", String(analysis.reruns));
@@ -249,6 +252,12 @@ function render({ run, analysis }) {
     if (d && !(d.step === p.step && d.next_scored_step === p.next_scored_step)) {
       lines.push(`The single biggest drop (${where(d)}: ${pct(d.rate_before)} → ${pct(d.rate_after)}) is ${d.confident ? "also significant" : "likely an unlucky dip, since later steps recover"}.`);
     }
+    if (run.planted_step != null) {
+      const hit = run.planted_step >= p.step && run.planted_step < p.next_scored_step;
+      lines.unshift(hit
+        ? `✓ Matches the known answer: we planted a mistake at step ${run.planted_step}, and Rootstep found it without being told.`
+        : `✗ Does not match the known answer (planted at step ${run.planted_step}).`);
+    }
     for (const line of lines) finding.append(el("p", {}, line));
   } else {
     finding.innerHTML = "<strong>No point of no return found.</strong>";
@@ -269,6 +278,7 @@ function render({ run, analysis }) {
     const sc = scoreOf[s.index];
     if (sc) head.append(el("span", { class: "chip rescue" }, `rescued ${sc.successes}/${sc.tries}`));
     if (inPnr) head.append(el("span", { class: "chip pnr" }, "point of no return"));
+    if (s.planted) head.append(el("span", { class: "chip pnr" }, "planted mistake (known answer)"));
     if (s.action) head.append(el("span", { class: "chip" }, `exit ${s.exit_code}`));
     if (s.reply) head.append(el("span", { class: "chip pnr" }, `long reply: ${(s.reply_chars / 1000).toFixed(1)}k characters`));
     li.append(head);

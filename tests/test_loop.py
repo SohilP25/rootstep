@@ -100,3 +100,28 @@ def test_old_runs_keep_old_behaviour():
     llm = FakeLLM(["THOUGHT: a\n```bash\nls\n```\nextra text", "FINISH"])
     run = asyncio.run(run_agent(TEXTSTATS, llm, FakeSandbox(), new_run()))
     assert run.steps[1].messages_sent[2]["content"].endswith("extra text")
+
+
+def test_planted_mistake_replaces_the_decision():
+    plant = {"step": 1, "command": "printf '\\n' >> /repo/tests/test_cli.py", "thought": "tidy up"}
+    llm = FakeLLM([bash("ls"), "FINISH"])   # the planted step doesn't use a model reply
+    run = asyncio.run(run_agent(TEXTSTATS, llm, FakeSandbox(), new_run(), plant=plant))
+
+    assert [s.planted for s in run.steps] == [False, True, False]
+    assert run.steps[1].action == plant["command"]          # the planted command ran
+    assert len(llm.calls) == 2                              # the model wasn't asked at step 1
+    assert run.steps[1].cost_usd == 0.0
+    kept = run.steps[2].messages_sent[2 + 2]["content"]     # history after step 1
+    assert kept == "THOUGHT: tidy up\n```bash\nprintf '\\n' >> /repo/tests/test_cli.py\n```"
+
+
+def test_old_diaries_still_load(tmp_path):
+    import json
+    run = asyncio.run(run_agent(TEXTSTATS, FakeLLM([bash("ls"), "FINISH"]), FakeSandbox(), new_run()))
+    data = json.loads(run.save(tmp_path).read_text())
+    del data["planted_step"]
+    for step in data["steps"]:
+        del step["planted"]
+    (tmp_path / "old.json").write_text(json.dumps(data))
+    old = Run.load(tmp_path / "old.json")
+    assert old.planted_step is None and not any(s.planted for s in old.steps)

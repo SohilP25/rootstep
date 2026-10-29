@@ -46,6 +46,7 @@ def page_data(run: Run, analysis: dict) -> dict:
             "finish": finished,
             "exit_code": s.exit_code,
             "output": output[:MAX_OUTPUT] + ("\n…" if len(output) > MAX_OUTPUT else ""),
+            "planted": s.planted,
             "reply_chars": len(s.raw_response),
             "reply": s.raw_response[:MAX_REPLY] + ("\n…" if len(s.raw_response) > MAX_REPLY else "")
                      if len(s.raw_response) > LONG_REPLY else None,
@@ -53,6 +54,7 @@ def page_data(run: Run, analysis: dict) -> dict:
     scores = [{k: v for k, v in sc.items() if k not in ("rerun_ids", "errors")} for sc in analysis["scores"]]
     return {
         "run": {"run_id": run.run_id, "task": run.task, "success": run.success, "finished": run.finished,
+                "planted_step": run.planted_step,
                 "model": run.config.get("model"), "max_steps": run.config.get("max_steps"),
                 "cost_usd": round(run.total_cost_usd, 5), "steps": steps},
         "analysis": {"scores": scores,
@@ -65,6 +67,8 @@ def page_data(run: Run, analysis: dict) -> dict:
 
 def main() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+    for old in DATA_DIR.glob("*.json"):   # the page shows exactly the analyses in runs/ now
+        old.unlink()
     index = []
     for path in sorted(RUNS_DIR.glob("*.analysis.json")):
         analysis = json.loads(path.read_text())
@@ -74,6 +78,7 @@ def main() -> None:
         data = page_data(run, analysis)
         (DATA_DIR / f"{run.run_id}.json").write_text(json.dumps(data, indent=1))
         index.append({"run_id": run.run_id, "task": run.task, "success": run.success,
+                      "planted_step": run.planted_step,
                       "steps": len(run.steps), "reruns": data["analysis"]["reruns"],
                       "point_of_no_return": analysis["point_of_no_return"]})
         print(f"exported {run.run_id} ({len(run.steps)} steps, {data['analysis']['reruns']} re-runs)")
