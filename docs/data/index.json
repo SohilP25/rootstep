@@ -1,24 +1,17 @@
 [
  {
-  "run_id": "382be4fa-k0-e8ca",
+  "run_id": "6198aa32",
   "task": "textstats",
   "success": false,
-  "steps": 30,
-  "reruns": 40,
-  "point_of_no_return": {
-   "step": 15,
-   "next_scored_step": 18,
-   "rate_before": 0.25,
-   "later_tries": 16,
-   "confident": false
-  }
- },
- {
-  "run_id": "382be4fa",
-  "task": "textstats",
-  "success": true,
+  "planted_step": 3,
   "steps": 19,
-  "reruns": 15,
-  "point_of_no_return": null
+  "reruns": 28,
+  "point_of_no_return": {
+   "step": 3,
+   "next_scored_step": 4,
+   "rate_before": 1.0,
+   "later_tries": 12,
+   "confident": true
+  }
  }
 ]

@@ -175,7 +175,7 @@ let current = null;
 async function start() {
   let index = [];
   try {
-    index = await (await fetch("data/index.json")).json();
+    index = await (await fetch("data/index.json", { cache: "no-cache" })).json();
   } catch (e) {
     $("#content").innerHTML = '<p class="empty card">No analyses found. Run <code>python rootstep/export_site.py</code> first.</p>';
     return;
@@ -200,7 +200,7 @@ async function start() {
 }
 
 async function load(runId) {
-  current = await (await fetch(`data/${runId}.json`)).json();
+  current = await (await fetch(`data/${runId}.json`, { cache: "no-cache" })).json();
   render(current);
   history.replaceState(null, "", `?run=${encodeURIComponent(runId)}`);
 }
@@ -312,7 +312,8 @@ function drawChart(run, analysis) {
   box.innerHTML = "";
   const W = Math.max(300, box.clientWidth), H = 260;
   const m = { top: 28, right: 8, bottom: 30, left: 40 };
-  const first = run.steps[0].index, last = run.steps[run.steps.length - 1].index;
+  const scoredSteps = analysis.scores.map((s) => s.step);
+  const first = Math.min(...scoredSteps), last = Math.max(...scoredSteps);
   const n = last - first + 1;
   const band = (W - m.left - m.right) / n;
   const x = (step) => m.left + (step - first + 0.5) * band;
